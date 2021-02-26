@@ -1,0 +1,1460 @@
+---
+title: "Community event-based surveillance weekly report, Cox's Bazar"
+author: "Cox's Bazar MSF-OCA Epidemiology Team" 
+output:
+  word_document:
+    reference_docx: template_episitrep.docx
+  pdf_document: default
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
+---
+
+
+```{r setup, include=FALSE, results='hide', message=FALSE, warning=FALSE}
+## hide all code chunks in the output, but show errors
+knitr::opts_chunk$set(echo = FALSE,       # hide all code chunks in output
+                      error = TRUE,       # show errors if they appear, but don't stop
+                      fig.width = 6*1.25, # Figure width
+                      fig.height = 6,      # Figure height
+                      warning = FALSE,
+                      message = FALSE
+                     )
+
+
+
+## set default NA to - in output, define figure width/height
+options(knitr.kable.NA = "-")
+
+
+
+## Installing required packages for this template
+required_packages <- c("knitr",       # create output docs
+                       "here",        # find your files
+                       "dplyr",       # clean/shape data
+                       # "forcats",     # clean/shape data
+                       "stringr",     # clean text
+                       "rio",         # read in data
+                       "ggplot2",     # create plots and charts
+                       "patchwork",   # combine plots in one
+                       "epikit",      # create categories from numerical variable
+                       # "sitrep",      # MSF field epi functions
+                       # "linelist",    # Functions for cleaning/standardising data/dates
+                       # "matchmaker",  # dictionary-based standardization of variables
+                       "incidence",   # create epicurves
+                       # "aweek",       # define epi weeks
+                       "sf",          # encode spatial vector data
+                       "ggspatial",   # plot maps
+                       "classInt",    # specifying breaks for maps
+                       "tsibble",     # time series data
+                       # "slider",      # time series data
+                       "tidyr",       # long/long adjustements to data
+                       "gt",          # make nice tables
+                       "gtsummary",   # make nice tables
+                       "viridis",     # additional palette to choose from
+                       "data.table",  # for taking last and first values from dataframes
+                       "tinytex")     # for making PDF
+
+for (pkg in required_packages) {
+  # install packages if not already present
+  if (!pkg %in% rownames(installed.packages())) {
+    install.packages(pkg)
+  }
+  
+  # load packages to this current session 
+  library(pkg, character.only = TRUE)
+}
+
+
+
+## Set default options for plots and charts
+
+## set default text size to 16 for plots
+## give classic black/white axes for plots
+ggplot2::theme_set(theme_classic(base_size = 18))
+
+## sets the theme in ggplot for epicurves
+epicurve_theme <- theme(
+  axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1), 
+  legend.title = element_blank(),
+  panel.grid.major.x = element_line(color = "grey60", linetype = 3),
+  panel.grid.major.y = element_line(color = "grey60", linetype = 3))
+```
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// define_current_week \\\
+--------------------------------------------------------------------------------
+
+You need to set the week you want to report on. Generally, this is the previous
+week. Put it below.
+
+aweek::set_week_start will define the beginning of the week. The standard is
+Monday.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+<!-- **This section will need to be updated weekly** -->
+<!-- ##[EDIT] -->
+```{r define_current_week}
+
+## set current week and start date on Sunday
+reporting_week <- yearweek(Sys.Date(),week_start = 7) -1
+
+## Set previous week
+last_week <- reporting_week - 1
+
+# Set two weeks ago
+two_weeks_ago <- reporting_week - 2
+
+# Set three weeks ago
+three_weeks_ago <- reporting_week - 3
+
+```
+Data as reported by `r reporting_week`.
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// read_nonDHIS_data \\\
+---------------------------------------------------------------------------------->
+
+```{r read_nonDHIS_data, warning = FALSE, message = FALSE}
+
+## EBS data 
+ebs_raw  <- rio::import(here::here("2021", "2_data", "EBS form.xlsx")) %>% 
+  ## make all colnames lower case
+  janitor::clean_names() 
+
+```
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// Data cleaning \\\
+---------------------------------------------------------------------------------->
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This part of the script will create and clean variables in your data.
+
+All your cleaning and variable creation should happen in these chunks.
+That way, in case something goes wrong, you can push the small arrow at the top
+of the chunk to re-run all the code chunks up to the current one.
+
+The chunks are:
+- standardise_dates -- will set up and clean dates.
+- create_vars       -- creates variables based on other variables
+
+You must adapt this section according to your data!
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// standardise_dates \\\
+--------------------------------------------------------------------------------
+
+This chunk will help you set up and clean your date variables.
+Also removes any empty columns
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r standardise_dates}
+
+## use the guess_dates() function to make a first pass at date variables.
+ebs_cleaned <- ebs_raw %>%
+  # mutate_at(c("chv_signals_date_case_reported",
+  #             "verification_date_of_assessment"),
+  #           linelist::guess_dates,
+  #           error_tolerance = 0.5) %>% 
+  ## remove empty columns
+  janitor::remove_empty("cols")
+
+```
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// create_vars \\\
+--------------------------------------------------------------------------------
+
+This chunk will help you construct new variables from other variables. 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+```{r create_vars}
+
+## create epiweeks for the signals and assessments
+ebs_cleaned <- ebs_cleaned %>% 
+  ## create an epi week signal variable
+  mutate(epiweek_signal = yearweek(chv_signals_date_case_reported, 
+                                           week_start = 7)) %>% 
+  ## create an epi week verification signal
+  mutate(epiweek_invest = yearweek(verification_date_of_assessment, 
+                                                  week_start = 7)) %>% 
+  ## create an epi week risk assessment
+  mutate(epiweek_ra = yearweek(date_of_risk_assessment, 
+                                                  week_start = 7))
+
+
+## recode the event variable
+ebs_cleaned <- ebs_cleaned %>% 
+  mutate(chv_signals_event = case_when(
+    chv_signals_event == "1" ~ "Illness",
+    chv_signals_event == "8" ~ "Death",
+    chv_signals_event == "10" ~ "Unusual health event",
+    TRUE ~ NA_character_
+  ))
+
+
+## make a combined event variable that takes into consideration the details
+ebs_cleaned <- ebs_cleaned %>% 
+  mutate(total_event  = case_when(
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "AJS" ~ "Illness (regular outbreak-prone)",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "AWD" ~ "Illness (regular outbreak-prone)",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "AFP" ~ "Illness (regular outbreak-prone)",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "Measles" ~ "Illness (regular outbreak-prone)",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "Meningitis" ~ "Illness (regular outbreak-prone)",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "Diphtheria" ~ "Illness (regular outbreak-prone)",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "ARTI/Suspected Covid" ~  "Suspected COVID",
+    chv_signals_eventdescription == "Skin disease" ~ "Skin disease",
+    chv_signals_event == "Death" & chv_signals_eventdescription == "ARTI/Suspected Covid" ~ "Suspected COVID death",
+    chv_signals_event == "Death" ~ "Other death",
+    chv_signals_event  == "Livestock" ~ "Unusual health event",
+    chv_signals_eventdescription == "livestock" ~ "Unusual health event",
+    chv_signals_event == "Unusual health event" ~ "Unusual health event",
+    TRUE ~ NA_character_
+  ))
+
+
+## make a detail event variable
+ebs_cleaned <- ebs_cleaned %>% 
+  mutate(total_event_detail = case_when(
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "AJS" ~ "AJS",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "AWD" ~ "AWD",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "AFP" ~ "AFP",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "Measles" ~ "Measles",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "Meningitis" ~ "Meningitis",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "Diphtheria" ~ "Diphtheria",
+    chv_signals_event == "Illness" & chv_signals_eventdescription == "ARTI/Suspected Covid" ~  "Suspected COVID",
+    chv_signals_eventdescription == "Skin disease" ~ "Skin disease",
+    chv_signals_event == "Death" & chv_signals_eventdescription == "ARTI/Suspected Covid" ~ "Suspected COVID death",
+    chv_signals_event == "Death" ~ "Other death",
+    chv_signals_eventdescription == "livestock" ~ "Unusual health event",
+    chv_signals_event == "Unusual health event" ~ "Unusual health event",
+    TRUE ~ NA_character_
+  ))
+
+
+## make a signal status variable
+ebs_cleaned <- ebs_cleaned %>% 
+  mutate(signal_status = case_when(
+    verification_is_the_event_confirem == "yes" ~ "Verified",
+    chv_signals_verification_req == "yes"  | 
+      chv_signals_verification_req == "no" ~ "Investigated (not valid)",
+    TRUE ~ "Not investigated"
+  )) %>% 
+  ## convert signal status to a factor and specify the levels
+  mutate(signal_status = factor(signal_status,
+                                levels = c("Verified", 
+                                           "Investigated (not valid)",
+                                           "Not investigated")))
+
+
+## make a camp variable to match with the shapefile
+ebs_cleaned <- ebs_cleaned %>% 
+  ## create a camp variable that adds "Camp " in front of the number
+  mutate(site_name  = paste0("Camp ",chv_signals_camp)) %>% 
+  ## replace lower case e to upper case
+  mutate(site_name = str_replace(site_name, "e", "E")) %>% 
+  ## replace lower case w to upper case
+  mutate(site_name = str_replace(site_name, "w", "W"))
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// make additional data subset \\\
+--------------------------------------------------------------------------------
+
+This chunk will help you construct a data subset for mapping purposes 
+- AWD
+- AJS
+- Diphtheria
+- Suspected COVID-19
+- Measles
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r functions}
+
+## create a function to extract count data for specific verified signals past week
+count_verified_signals_past_week <- function(data, signal =
+                                               c("AWD",
+                                                 "AJS", 
+                                                 "Measles",
+                                                 "Meningitis",
+                                                 "Diphtheria", 
+                                                 "Suspected COVID"))
+  {
+  data %>% 
+    ## specify time period to keep 
+    filter(epiweek_signal == reporting_week ) %>% 
+    ## only show the verified signals
+    filter(signal_status == "Verified") %>% 
+    ## filter on total_event detail
+    filter(total_event_detail == signal) %>% 
+    ## select variables of interest
+    select(site_name) %>% 
+    group_by_all() %>% 
+    tally()
+}  
+
+## create a function to extract count data for specific verified signals past 4weeks
+count_verified_signals_past_4weeks <- function(data, signal =
+                                               c("AWD",
+                                                 "AJS", 
+                                                 "Diphtheria", 
+                                                 "Measles",
+                                                 "Meningitis",
+                                                 "Suspected COVID"))
+  {
+  data %>% 
+    ## specify time period to keep 
+    filter(epiweek_signal >= three_weeks_ago & epiweek_signal <= reporting_week ) %>% 
+    ## only show the verified signals
+    filter(signal_status == "Verified") %>% 
+    ## filter on total_event detail
+    filter(total_event_detail == signal) %>% 
+    ## select variables of interest
+    select(site_name) %>% 
+    group_by_all() %>% 
+    tally()
+    }                                                
+
+
+```
+
+<!-- ## Automated text for reporting paragraph -->
+
+```{r reporting}
+
+## count of weekly signals
+total_signals_received <- ebs_cleaned %>% 
+  ## choose only the signals from the reporting week
+  filter(epiweek_signal == reporting_week) 
+  
+
+## Count of weekly signals investigated
+total_signals_investigated <- ebs_cleaned %>% 
+  ## choose only the signals from the reporting week
+  filter(epiweek_signal == reporting_week) %>% 
+  ## choose only the signals that were verified or investigated and not validated
+  filter(signal_status %in% c("Verified", "Investigated (not valid)"))
+
+## count of weekly signals verified
+verified_signals_investigated <- ebs_cleaned %>% 
+  ## choose only the signals from the reporting week
+  filter(epiweek_signal == reporting_week) %>% 
+  ## choose only the signals that were verified
+  filter(signal_status == "Verified")
+
+## count and proportion of investigated signals by who they were received from
+identification_investigated_signals <- ebs_cleaned %>% 
+  ## choose only the signals from the reporting week
+  filter(epiweek_signal == reporting_week) %>% 
+  ## choose only the signals that were verified or investigated and not validated
+  filter(signal_status %in% c("Verified", "Investigated (not valid)")) %>% 
+  ## select the who reported the data variable
+  select(chv_signals_cases_reported_by_who) %>% 
+  group_by_all() %>% 
+  ## count the number of signals received per category
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  mutate(proportion = round((n/sum(n, na.rm = TRUE))*100, digits = 0))
+
+
+          
+## Proportion of investigated signals received by CHWs
+prop_chv <- identification_investigated_signals %>% 
+  ## only select the number and percent received by CHVs
+  filter(chv_signals_cases_reported_by_who == "msf_worker" |
+          chv_signals_cases_reported_by_who == "hp_chv" ) %>% 
+  ## obtain the %
+  pull(proportion)
+
+## Proportion of investigated signals received by EAT
+prop_eat <- identification_investigated_signals %>% 
+  ## only select the number and percent received by CHVs
+  filter(chv_signals_cases_reported_by_who == "eat") %>% 
+  ## obtain the %
+  pull(proportion)
+  
+
+## Calculate the four week average
+four_week_signal_average  <- ebs_cleaned %>% 
+  ## keep last four weeks
+  filter(epiweek_signal >= three_weeks_ago & epiweek_signal <= reporting_week) %>% 
+  ## choose only the signals that were verified or investigated and not validated
+  filter(signal_status %in% c("Verified", "Investigated (not valid)")) %>% 
+  ## select variable of interest
+  select(epiweek_signal, signal_status) %>% 
+  group_by(epiweek_signal) %>% 
+  tally() %>% 
+  ## average of past four weeks
+  summarise(average = as.integer(mean(n, na.rm = TRUE)))
+  
+trend_investigated_signals <- if (four_week_signal_average > nrow(total_signals_investigated)) {
+  "a decreasing"
+} else if (four_week_signal_average < nrow(total_signals_investigated)) {
+  "increasing"
+} else {"no change"}
+
+## number of referrals by event type
+number_referred <- ebs_cleaned %>%
+  ## choose only the signals from the reporting week
+  filter(epiweek_invest == reporting_week) %>%
+  select(total_event_detail, verification_number_of_people_ref_arest_health_faciliy) %>%
+  filter(!is.na(verification_number_of_people_ref_arest_health_faciliy)) %>%
+  ## sum of cases in week
+  group_by(total_event_detail) %>%
+  summarise(Referred=sum(verification_number_of_people_ref_arest_health_faciliy))
+
+## number of referrals in total
+number_referred_total <- number_referred %>%
+  summarise(Referred=sum(Referred))
+
+##number of referrals that required follow up
+number_referred_fu <- ebs_cleaned %>%
+    ## choose only the signals from the reporting week
+  filter(epiweek_invest == reporting_week) %>%
+  select(total_event_detail, verification_referal_fu) %>%
+  filter(!is.na(verification_referal_fu)) %>%
+  ## sum of cases in week
+  group_by(total_event_detail) %>%
+  summarise(Referred_FU=sum(verification_referal_fu))
+
+## number of fu referrals in total
+number_referred_fu_total <- number_referred_fu %>%
+  summarise(Referred_FU=sum(Referred_FU))
+
+## number of risk assessments done
+risk_as <-ebs_cleaned %>%
+    ## choose only the risk assessments from the reporting week
+  filter(epiweek_ra == reporting_week) 
+
+##number of risk assessments that require response
+risk_as_resp <-ebs_cleaned %>%
+    ## choose only the risk assessments from the reporting week
+  filter(epiweek_ra == reporting_week) %>%
+    ## chose only the risk assessments categorised as minor- severe
+  filter(what_was_the_risk_level =="minor"|what_was_the_risk_level =="moderate"|what_was_the_risk_level =="major"|what_was_the_risk_level =="severe")
+  
+```
+
+<!-- ## Automated text for regular outbreak reporting -->
+
+
+```{r regular_outbreak}
+## count of illness signals investigated
+illness_signals_investigated <- ebs_cleaned %>% 
+  ## only keep the signals from the reporting week
+  filter(epiweek_signal == reporting_week) %>% 
+   ## choose only the signals that were verified or investigated and not validated
+  filter(signal_status %in% c("Verified", "Investigated (not valid)")) %>% 
+  ## only choose those that correspond to illnesses
+  filter(total_event == "Illness (regular outbreak-prone)")
+
+
+## Calculate the four week average of illness signals
+four_week_illness_signal_average  <- ebs_cleaned %>% 
+  ## keep last four weeks
+  filter(epiweek_signal >= three_weeks_ago & epiweek_signal <= reporting_week) %>% 
+  ## choose only the signals that were verified or investigated and not validated
+  filter(signal_status %in% c("Verified", "Investigated (not valid)")) %>% 
+  ## only keep the illness signals
+  filter(total_event == "Illness (regular outbreak-prone)") %>% 
+  ## select variable of interest
+  select(epiweek_signal, signal_status) %>% 
+  group_by(epiweek_signal) %>% 
+  tally() %>% 
+  ## average of past four weeks
+  summarise(average = as.integer(mean(n, na.rm = TRUE)))
+
+## Check compared to the average of the past 4 weeks if current week is higher?
+trend_investigated_illness_signals <- if (four_week_illness_signal_average > nrow(illness_signals_investigated)) {
+  "lower"
+} else if (four_week_illness_signal_average < nrow(illness_signals_investigated)) {
+  "higher"
+} else {"the same"}
+
+```
+
+<!-- ## Automated text for suspected COVID-19 cases -->
+
+```{r suspected_c19}
+
+## count of covid19 signals investigated
+covid19_signals_investigated <- ebs_cleaned %>% 
+  ## only keep the signals from the reporting week
+  filter(epiweek_signal == reporting_week) %>% 
+   ## choose only the signals that were verified or investigated and not validated
+  filter(signal_status %in% c("Verified", "Investigated (not valid)")) %>% 
+  ## only choose those that correspond to illnesses
+  filter(total_event == "Suspected COVID")
+
+
+## Calculate the four week average of covid19 signals
+four_week_covid19_signal_average  <- ebs_cleaned %>% 
+  ## keep last four weeks
+  filter(epiweek_signal >= three_weeks_ago & epiweek_signal <= reporting_week) %>% 
+  ## choose only the signals that were verified or investigated and not validated
+  filter(signal_status %in% c("Verified", "Investigated (not valid)")) %>% 
+   ## only choose those that correspond to illnesses
+  filter(total_event == "Suspected COVID") %>% 
+  ## select variable of interest
+  select(epiweek_signal, signal_status) %>% 
+  group_by(epiweek_signal) %>% 
+  tally() %>% 
+  ## average of past four weeks
+  summarise(average = as.integer(mean(n, na.rm = TRUE)))
+
+## Check compared to the average of the past 4 weeks if current week is higher?
+trend_investigated_covid_signals <- if (four_week_covid19_signal_average > nrow(covid19_signals_investigated)) {
+  "a decrease"
+} else if (four_week_covid19_signal_average < nrow(covid19_signals_investigated)) {
+  "an increase"
+} else {"no change"}
+
+```
+
+<!-- ## Automated text for unusual health events -->
+
+```{r unusual_health_events}
+
+## count of unusual event signals investigated
+unusual_event_signals_investigated <- ebs_cleaned %>% 
+  ## only keep the signals from the reporting week
+  filter(epiweek_signal == reporting_week) %>% 
+   ## choose only the signals that were verified or investigated and not validated
+  filter(signal_status %in% c("Verified", "Investigated (not valid)")) %>% 
+  ## only choose those that correspond to illnesses
+  filter(total_event == "Unusual health event")
+
+## count of verified unusual health event verified
+verified_unusual_event <- unusual_event_signals_investigated %>% 
+  ## only keep those that were verified
+  filter(signal_status == "Verified")
+
+```
+
+
+<!-- ## Automated text for deaths -->
+
+```{r deaths}
+
+## count of deaths investigated
+death_signals_investigated <- ebs_cleaned %>% 
+  ## only keep the signals from the reporting week
+  filter(epiweek_signal == reporting_week) %>% 
+   ## choose only the signals that were verified or investigated and not validated
+  filter(signal_status %in% c("Verified", "Investigated (not valid)")) %>% 
+  ## only choose those that correspond to illnesses
+  filter(total_event %in% c("Other death", "Suspected COVID death"))
+
+
+## count of suspected covid19 deaths
+covid_deaths <- death_signals_investigated %>% 
+  ## only count the covid-19 deaths
+  filter(total_event == "Suspected COVID death")
+
+## count of verified suspected covid19 deaths
+verified_covid_deaths <- death_signals_investigated %>% 
+  ## only count the covid-19 deaths
+  filter(total_event == "Suspected COVID death") %>% 
+  ## only keep the verified signals
+  filter(signal_status == "Verified")
+
+```
+<!-- ## Automated text for Thresholds and recommendations -->
+
+```{r thresholda}
+
+thresholda <- ebs_cleaned %>%
+  ## only keep signals reported during the reporting week 
+  filter(epiweek_signal == reporting_week) %>% 
+  ## only keep the verified signals
+  filter(signal_status == "Verified")  %>%
+  ## only keep signals that require a response
+  filter(verification_do_you_think_response_is_requi == "yes")  %>%
+  ## only keep signals where no other actor is responding
+  filter(verification_is_there_any_other_organizatio == "no")  %>%
+  ## count number of signals per event type, per camp
+  count(chv_signals_camp, total_event_detail, sort=TRUE)
+
+thresholda <- thresholda[1,]
+
+```
+
+```{r thresholdb}
+ thresholdb <-ebs_cleaned %>%
+  ## only keep signals reported during the reporting week 
+  filter(epiweek_signal == reporting_week) %>% 
+  ## only keep the verified signals
+  filter(signal_status == "Verified")  %>%
+  ## only keep signals that require a response
+  filter(verification_do_you_think_response_is_requi == "yes")  %>%
+  ## only keep signals where no other actor is responding
+  filter(verification_is_there_any_other_organizatio == "no")  %>%
+  group_by(chv_signals_camp) %>%
+  ## by camp, keep the max number of people affected
+  filter(verification_how_many_people == max(verification_how_many_people) ) %>% 
+  ## Select the camp, detail and the number of people affected
+              select(chv_signals_camp,total_event_detail,    verification_how_many_people)
+
+## arrange the datbase in order from big to small in terms of # affected
+thresholdb <- thresholdb %>%
+  arrange(desc(verification_how_many_people))
+## Extract the event with the greatest number of people affected
+thresholdb <- thresholdb[1,]
+ 
+
+
+```
+
+```{r thresholdc}
+
+thresholdc  <- ebs_cleaned %>% 
+  ## keep last three weeks
+  filter(epiweek_signal >= two_weeks_ago & epiweek_signal <= reporting_week) %>% 
+  ## choose only the signals that were verified 
+  filter(signal_status == "Verified")  %>%
+  ## only keep signals that require a response
+  filter(verification_do_you_think_response_is_requi == "yes")  %>%
+  ## only keep signals where no other actor is responding
+  filter(verification_is_there_any_other_organizatio == "no")  %>%
+  ##drop signals that are not categorised
+  drop_na(total_event_detail) %>%
+  ## select variable of interest
+  select( epiweek_signal, total_event_detail, verification_how_many_people) %>% 
+  group_by(total_event_detail, epiweek_signal) %>% 
+  ## sum of cases in week
+  summarise(n = sum(verification_how_many_people))
+
+thresholdc <- thresholdc %>%
+  ## make a wide dataseat
+  spread(epiweek_signal, n, fill=0) %>% 
+  ## rename to show that it's signals
+  dplyr::rename("Signals" = total_event_detail) 
+
+## replace "NA" with 0
+thresholdc[is.na(thresholdc)] <- 0
+
+## Create a variable that shows if there has been a consecutive increase in the past 3 weeks
+ thresholdc$increase <- ifelse(
+    thresholdc[[as.character(two_weeks_ago)]] < thresholdc[[as.character(last_week)]] & 
+      thresholdc[[as.character(last_week)]] < thresholdc[[as.character(reporting_week)]],
+    TRUE, 
+    FALSE)  
+ 
+
+thresholdc_increase <- thresholdc %>%
+  filter(increase==TRUE) %>%
+  ## arrange the datbase in order from big to small in terms of # affected
+  arrange(desc(reporting_week)) %>%
+  ## drop livestock, unusual events and other deaths from this- since these categories are formed of many subcategories that need to be further reviewed before recommending a risk assessment
+  filter( Signals!= "Other death" & Signals!="Unusual health event")
+## Extract the event with the greatest number of people affected
+thresholdc_increase <- thresholdc_increase[1,]
+
+
+```
+
+# Summary  
+This community event-based surveillance (EBS) report covers topics of cluster of illness, cluster of death or increased death, unusual health events, and livestock diseases in Cox's Bazar in `r reporting_week` 
+
+## Reporting   
+  - During `r reporting_week`, there were a total of `r  nrow(total_signals_received)` signals received of which `r nrow(total_signals_investigated)` signals were investigated by the Epidemiology Alert Team (EAT) and  `r nrow(verified_signals_investigated)` verified.  `r prop_chv`% of signals were identified by HP Community Health Volunteers (CHVs) or directly by the Epi team (`r prop_eat`%). There is `r trend_investigated_signals` trend in investigated signals compared to the average of the previous four weeks (`r four_week_signal_average %>% pull(average)`). The teams made `r number_referred_total %>% pull(Referred)` verbal referrals to the person's nearest health facility, including `r number_referred_fu_total %>% pull(Referred_FU)` people who required follow up at MSF OCA facility. `r nrow(risk_as)` risk assessments were done and `r nrow(risk_as_resp)` events were classified as more than minimal risk  (minor-severe) requiring additional response and resources- see attachments.
+  
+## Regular outbreak reporting  
+
+  - `r nrow(illness_signals_investigated)` outbreak-prone illness signals were investigated in `r reporting_week`, of which `r fmt_count(illness_signals_investigated, total_event_detail == "AFP")` AFP,  `r fmt_count(illness_signals_investigated, total_event_detail == "AJS")` AJS, `r fmt_count(illness_signals_investigated, total_event_detail == "AWD")` AWD, `r fmt_count(illness_signals_investigated, total_event_detail == "Diphtheria")` Diphtheria,  `r fmt_count(illness_signals_investigated, total_event_detail == "Measles")` measles and `r fmt_count(illness_signals_investigated, total_event_detail == "Menigitis")` meningitis. `r fmt_count(illness_signals_investigated, signal_status == "Verified")` of the illness signals were verified by the EAT. The total illness signals investigated in `r reporting_week` is `r trend_investigated_illness_signals` compared to the four week average of `r four_week_illness_signal_average %>% pull(average) `.
+
+## Suspected COVID-19 cases  
+   - During `r reporting_week`,`r nrow(covid19_signals_investigated)` signals for suspected COVID-19 were investigated and `r fmt_count(covid19_signals_investigated, verification_how_many_people >= 2)` of them were clusters of two or more cases. There is `r trend_investigated_covid_signals ` in `r reporting_week` compared to the average of the past four weeks (`r four_week_covid19_signal_average %>% pull(average)`)
+   
+## Unusual health events  
+  - During `r reporting_week`, there was a total of `r nrow(unusual_event_signals_investigated)` unusual health events investigated. Among them `r nrow(verified_unusual_event)` (`r round((nrow(verified_unusual_event)/nrow(unusual_event_signals_investigated))*100, digits = 0)`%) were verified. 
+
+
+## Deaths  
+  - There were a total of `r nrow(death_signals_investigated)` deaths investigated, of which `r fmt_count(death_signals_investigated, verification_how_many_people == 1)` single deaths and `r fmt_count(death_signals_investigated, verification_how_many_people >= 2)` clusters of deaths investigated. `r fmt_count(death_signals_investigated, total_event == "Suspected COVID death")` ARTI/suspected COVID-19 death signals were investigated and `r nrow(verified_covid_deaths)` were verified.
+  
+# Recommendations  
+  - Risk assessment for `r thresholda %>% pull(total_event_detail)` in camp `r thresholda %>% pull(chv_signals_camp)` since there  were `r thresholda %>% pull(n)` clusters in this camp in the reporting week
+  
+  - Risk assessment for `r thresholdb %>% pull(total_event_detail)` in camp `r thresholdb %>% pull(chv_signals_camp)` since there was 1 large cluster that affected `r thresholdb %>% pull(verification_how_many_people)` people. 
+  
+  - Risk assessment for `r thresholdc_increase %>% pull(Signals)` since there has been an increase in the number of people affected across the camps in the past three consecutive weeks and `r thresholdc_increase %>% pull(c(4))` people affected in the reporting week
+  
+<!-- ##Here add any other recommendations- including any facility based information that may be linked, or info from risk assessments  -->
+<!-- ##[EDIT] -->
+[INSERT ANY OTHER SUMMARY TEXT HERE]
+  
+
+\newpage
+
+
+
+<!-- ## Table 1 -->
+<!-- Create summary table for the week -->
+## EBS activities in `r reporting_week`
+<!-- ##[EDIT] -->
+[INSERT SUMMARY TEXT HERE]
+
+
+
+```{r summary_table}
+
+ebs_cleaned %>% 
+  ## only keep signals reported during the reporting week
+  filter(epiweek_signal == reporting_week) %>% 
+  ## select variables to use for table
+  select("Signal type" = total_event, 
+         signal_status) %>% 
+  ## use tbl_summary from gtsummary package to make table
+  tbl_summary(by = signal_status, 
+              missing = "no") %>% 
+  ## add total for the week
+  add_overall() %>%
+  bold_labels() %>%
+  as_gt() %>%
+  gt::gtsave(filename="summary.png", path = here::here("2021", "4_output", "archive"))
+```
+
+## Verified signals in `r reporting_week`
+<!-- ##[EDIT] -->
+[INSERT SUMMARY TEXT HERE]
+
+<!-- ## Figure 1 - Number of verified signals per week -->
+```{r plot_verified_signals, fig.height=5}
+
+## make a dataset that only included verified signals
+ebs_verified <- ebs_cleaned %>% 
+  ## only  keep the verified signals
+  filter(signal_status == "Verified") %>% 
+  ## remove any NAs from total_event_detail
+  filter(is.na(total_event_detail) == FALSE) %>% 
+  ## only keep those with epiweek data
+  filter(is.na(epiweek_signal) == FALSE) %>% 
+  ## only include signals from reporting_week and before
+  filter(epiweek_signal <= reporting_week)
+
+## make a subset which is just for the plot
+ebs_verified_plot <- ebs_verified %>% 
+  ## only  keep outbreak-prone illnesses
+  filter(total_event_detail == "AFP" | total_event_detail == "AJS"| total_event_detail == "AWD"| total_event_detail == "Diphtheria" | total_event_detail == "Measles"| total_event_detail == "Suspected COVID") %>%
+  ## group by week and event detail
+  group_by(epiweek_signal, total_event_detail) %>% 
+  ## tally
+  tally()
+  ## clean epiweek for clearer labeling
+ebs_verified_plot$epiweek_signal <-  substr(ebs_verified_plot$epiweek_signal, 7, 8)
+
+
+# ##THIS IS THE OLD STACKED GRAPH SCRIPT
+#   ## Make a plot
+# ggplot(ebs_verified_plot, aes(x = epiweek_signal, y = n, 
+#                          fill = total_event_detail)) +
+#   ## stacked barplot
+#   geom_col(position = "stack") +
+#   ## Use the viridis colour choice
+#   scale_fill_viridis(discrete = TRUE, option = "D" ) +
+#   ## standardised aesthetic modifications to plot
+#   theme_classic() +
+#   ## add labels
+#   labs(x = "Week",
+#        y = "Number of signals",
+#        fill = "Detail of verified signals",
+#        title = "Verified outbreak-prone signals by epidemiological week")
+
+
+## bar graph non stacked per outbreak illness
+ggplot(ebs_verified_plot, aes(x = epiweek_signal, y = n, fill = total_event_detail)) +
+  ## barplot
+  geom_col(position="dodge") +
+  geom_text(aes(label=n), vjust= -0.5, size=2.5) +
+  ## Use the viridis colour choice
+  scale_fill_viridis(discrete = TRUE, option = "D" ) +
+  ggtitle("Outbreak-prone illness signals per epi week") +
+  facet_wrap(~total_event_detail) +
+  theme_minimal() +
+  theme (text=element_text(size=10), axis.text.x= element_text(angle=90), legend.position= "none") +
+   ## add labels
+  labs(x = "Epi week",
+       y = "Number of signals")
+```
+
+
+
+<!-- ## Map -->
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// read_shapefiles \\\
+--------------------------------------------------------------------------------
+
+To create maps, you need to have a shapefile of the area. Often, the MSF GIS
+unit can provide shapefiles.
+
+Your shapefile can be a polygon or points. Polygons do not need to be contiguous.
+
+The names of the polygons or points MUST match the names in your linelist.
+
+Your coordinate reference system needs to be WGS84.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+```{r read_shapefiles, message=FALSE}
+
+## read in shapefile
+map <- read_sf(here::here("../../2_GIS/GIS/MSF_GIS_Folder/Camp shape file/Site_boundaries.shp")) %>% 
+  ## change all variables to lower case
+  janitor::clean_names()
+
+## create a subset of map file with only the main camp area
+map <- map %>% 
+  filter(!site_name %in% c("Camp 21", "Camp 22", 
+                           "Camp 23", "Camp 24",
+                           "Camp 25", "Camp 26", 
+                           "Camp 27", "Choukali",
+                           "Nayapara RC"))
+```
+
+
+<!-- ## Base layer from OSM -->
+
+```{r obtain_base_layer}
+
+tiles <- cartography::getTiles(
+  map,
+  type = "OpenStreetMap",
+  zoom = NULL,
+  crop = TRUE,
+  verbose = FALSE,
+  apikey = NA,
+  cachedir = FALSE,
+  forceDownload = FALSE
+)
+
+```
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// choropleth_maps \\\
+--------------------------------------------------------------------------------
+
+Once you have loaded your shapefile, you can map the case counts or attack rates.
+
+Make sure you delete or comment out the section you are not using.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+<!-- ## Suspected COVID map in the past week -->
+
+```{r choropleth_covid_pw_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+covid_past_week <- map %>% 
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_week(ebs_cleaned, 
+                                             "Suspected COVID"),
+            by = "site_name") %>% 
+  
+    ## create levels for counts of covid
+  mutate(covid_counts =  fac_from_num(n))%>% 
+  ## remove the NA from covid_counts
+  filter(is.na(covid_counts) == FALSE)
+  
+
+
+## Plot map of cases by block
+covid_past_week_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = covid_past_week, aes(fill = covid_counts)) + 
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) + 
+  # add a scalebar
+  annotation_scale() + 
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = covid_past_week, aes(label = site_name), colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {reporting_week}"),
+       title = str_glue("Number of verified suspected COVID-19\n signals in Cox's Bazar, {reporting_week}"))
+  
+
+
+
+```
+
+<!-- ## Suspected COVID map in the past week -->
+
+```{r choropleth_covid_p4w_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+covid_past_4weeks <- map %>% 
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_4weeks(ebs_cleaned, 
+                                             "Suspected COVID"),
+            by = "site_name") %>% 
+    ## create levels for counts of covid
+  mutate(covid_counts =  fac_from_num(n)) %>% 
+  ## remove the NA from covid_counts
+  filter(is.na(covid_counts) == FALSE)
+  
+
+
+## Plot map of cases by block
+covid_past_4weeks_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = covid_past_4weeks, aes(fill = covid_counts)) + 
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) + 
+  # add a scalebar
+  annotation_scale() + 
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = covid_past_week, aes(label = site_name), colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {three_weeks_ago}-
+                        {reporting_week}"),
+       title = str_glue("Number of verified suspected COVID-19\n signals in Cox's Bazar,\n {three_weeks_ago}-{reporting_week}"))
+  
+
+
+```
+
+<!-- #### Combine covid maps -->
+```{r combine_covid_maps, fig.height = 16, fig.height = 5}
+
+covid_past_4weeks_map  + covid_past_week_map 
+
+```
+
+
+<!-- ## AWD past week -->
+```{r choropleth_awd_pw_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+awd_past_week <- map %>% 
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_week(ebs_cleaned, "AWD"), 
+            by = "site_name") %>% 
+  ## create levels for counts of awd
+  mutate(awd_counts = fac_from_num(n)) %>% 
+  ## remove the empty values
+  filter(is.na(awd_counts) == FALSE)
+
+
+## Plot map of cases by camp
+awd_past_week_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = awd_past_week, aes(fill = awd_counts)) + 
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) + 
+  # add a scalebar
+  annotation_scale() + 
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = awd_past_week, aes(label = site_name), colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {reporting_week}"),
+       title = str_glue("Number of verified AWD signals in \nCox's Bazar,{reporting_week}"))
+  
+```
+
+<!-- ## AWD past 4 weeks -->
+
+```{r choropleth_awd_p4w_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+awd_past_4weeks <- map %>% 
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_4weeks(ebs_cleaned, "AWD"), 
+            by = "site_name") %>% 
+  ## create levels for counts of awd
+  mutate(awd_counts = fac_from_num(n)) %>% 
+  ## remove the empty values
+  filter(is.na(awd_counts) == FALSE)
+         
+
+
+## Plot map of cases by camp
+awd_past_4weeks_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = awd_past_4weeks, aes(fill = awd_counts)) + 
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) + 
+  # add a scalebar
+  annotation_scale() + 
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = awd_past_4weeks, aes(label = site_name), colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {three_weeks_ago} to {reporting_week}"),
+       title = str_glue("Number of verified AWD signals in \nCox's Bazar, {three_weeks_ago}-{reporting_week}"))
+  
+```
+
+<!-- #### Combine AWD maps -->
+```{r combine_awd_maps, fig.height = 16, fig.height = 5}
+
+awd_past_4weeks_map  + awd_past_week_map 
+
+```
+
+<!-- ## AJS map in the past week -->
+
+```{r choropleth_ajs_pw_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+ajs_past_week <- map %>% 
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_week(ebs_cleaned, "AJS"),
+            by = "site_name") %>% 
+    ## create levels for counts of ajs
+   mutate(ajs_counts = fac_from_num(n)) %>% 
+  ## remove the NA from ajs_counts
+  filter(is.na(ajs_counts) == FALSE)
+
+
+
+## Plot map of cases by camp
+ajs_past_week_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = ajs_past_week, aes(fill = ajs_counts)) + 
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) + 
+  # add a scalebar
+  annotation_scale() + 
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = ajs_past_week, aes(label = site_name), colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {reporting_week}"),
+       title = str_glue("Number of verified AJS signals in \nCox's Bazar,{reporting_week}"))
+  
+```
+
+<!-- ## AJS map in the past 4weeks -->
+
+```{r choropleth_ajs_p4w_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+ajs_past_4weeks <- map %>% 
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_4weeks(ebs_cleaned, "AJS"), 
+            by = "site_name") %>% 
+  ## create levels for counts of ajs
+  mutate(ajs_counts = fac_from_num(n)) %>% 
+  ## remove the empty values
+  filter(is.na(ajs_counts) == FALSE)
+         
+
+
+## Plot map of cases by camp
+ajs_past_4weeks_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = ajs_past_4weeks, aes(fill = ajs_counts)) + 
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) + 
+  # add a scalebar
+  annotation_scale() + 
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = ajs_past_4weeks, aes(label = site_name), colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {three_weeks_ago} to {reporting_week}"),
+       title = str_glue("Number of verified AJS signals in \nCox's Bazar, {three_weeks_ago}-{reporting_week}"))
+
+```
+
+
+<!-- #### Combine AJS maps -->
+```{r combine_ajs_maps, fig.height = 16, fig.height = 5}
+
+ajs_past_4weeks_map  + ajs_past_week_map 
+
+```
+
+<!-- ## Diphtheria map in the past week -->
+
+```{r choropleth_diphtheria_pw_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+diphtheria_past_week <- map %>% 
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_week(ebs_cleaned, "Diphtheria"),
+            by = "site_name") %>% 
+    ## create levels for counts of diphtheria
+ mutate(diphtheria_counts = fac_from_num(n)) %>% 
+  ## remove the NA from diphtheria_counts
+  filter(is.na(diphtheria_counts) == FALSE)
+
+
+## Plot map of cases by camp
+diphtheria_past_week_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = diphtheria_past_week, aes(fill = diphtheria_counts)) + 
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) + 
+  # add a scalebar
+  annotation_scale() + 
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = diphtheria_past_week, aes(label = site_name), colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {reporting_week}"),
+       title = str_glue("Number of verified Diphtheria signals in \nCox's Bazar,{reporting_week}"))
+  
+
+```
+
+
+<!-- ## diphtheria map in the past 4weeks -->
+
+```{r choropleth_diphtheria_p4w_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+diphtheria_past_4weeks <- map %>% 
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_4weeks(ebs_cleaned, "Diphtheria"), 
+            by = "site_name") %>% 
+  ## create levels for counts of diphtheria
+  mutate(diphtheria_counts = fac_from_num(n)) %>% 
+  ## remove the empty values
+  filter(is.na(diphtheria_counts) == FALSE)
+         
+
+
+## Plot map of cases by camp
+diphtheria_past_4weeks_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = diphtheria_past_4weeks, aes(fill = diphtheria_counts)) + 
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) + 
+  # add a scalebar
+  annotation_scale() + 
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = diphtheria_past_4weeks, aes(label = site_name),
+               colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {three_weeks_ago} to {reporting_week}"),
+       title = str_glue("Number of verified Diphtheria signals in \nCox's Bazar, {three_weeks_ago}-{reporting_week}"))
+
+
+
+
+```
+
+<!-- #### Combine diphtheria maps -->
+```{r combine_diphtheria_maps, fig.height = 16, fig.height = 5}
+
+diphtheria_past_4weeks_map  + diphtheria_past_week_map 
+
+```
+
+<!-- ## Measles map in the past week -->
+
+```{r choropleth_measles_pw_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+measles_past_week <- map %>%
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_week(ebs_cleaned, "Measles"),
+            by = "site_name") %>%
+    ## create levels for counts of measles
+ mutate(measles_counts = fac_from_num(n)) %>%
+  ## remove the NA from measles_counts
+  filter(is.na(measles_counts) == FALSE)
+
+
+## Plot map of cases by camp
+measles_past_week_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = measles_past_week, aes(fill = measles_counts)) +
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) +
+  # add a scalebar
+  annotation_scale() +
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = measles_past_week, aes(label = site_name),
+               colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {reporting_week}"),
+       title = str_glue("Number of verified Measles signals in\n Cox's Bazar, {reporting_week}"))
+  
+
+```
+
+
+<!-- ## measles map in the past 4weeks -->
+
+```{r choropleth_measles_p4w_maps, message = FALSE, warning = FALSE}
+
+# ## Join the past month dataset with map file
+measles_past_4weeks <- map %>%
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_4weeks(ebs_cleaned, "Measles"),
+            by = "site_name") %>%
+  ## create levels for counts of measles
+  mutate(measles_counts = fac_from_num(n)) %>%
+  ## remove the empty values
+  filter(is.na(measles_counts) == FALSE)
+
+
+
+## Plot map of cases by camp
+measles_past_4weeks_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = measles_past_4weeks, aes(fill = measles_counts)) +
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) +
+  # add a scalebar
+  annotation_scale() +
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = measles_past_4weeks, aes(label = site_name), colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {three_weeks_ago} to {reporting_week}"),
+       title = str_glue("Number of verified measles signals in \nCox's Bazar, {three_weeks_ago}-{reporting_week}"))
+
+```
+
+<!-- #### Combine measles maps -->
+```{r combine_measles_maps, fig.height = 16, fig.height = 5}
+
+ measles_past_4weeks_map  + measles_past_week_map 
+
+```
+
+
+<!-- ## meningitis map in the past week -->
+
+```{r choropleth_meningitis_pw_maps, message = FALSE, warning = FALSE}
+
+## Join the past month dataset with map file
+meningitis_past_week <- map %>%
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_week(ebs_cleaned, "Meningitis"),
+            by = "site_name") %>%
+    ## create levels for counts of meningitis
+ mutate(meningitis_counts = fac_from_num(n)) %>%
+  ## remove the NA from meningitis_counts
+  filter(is.na(meningitis_counts) == FALSE)
+
+
+## Plot map of cases by camp
+meningitis_past_week_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = meningitis_past_week, aes(fill = meningitis_counts)) +
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) +
+  # add a scalebar
+  annotation_scale() +
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = meningitis_past_week, aes(label = site_name),
+               colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {reporting_week}"),
+       title = str_glue("Number of verified meningitis signals in\n Cox's Bazar, {reporting_week}"))
+  
+
+```
+
+
+<!-- ## meningitis map in the past 4weeks -->
+
+```{r choropleth_meningitis_p4w_maps, message = FALSE, warning = FALSE}
+
+# ## Join the past month dataset with map file
+meningitis_past_4weeks <- map %>%
+  ## join the count data from past month verified dataset
+  left_join(count_verified_signals_past_4weeks(ebs_cleaned, "Meningitis"),
+            by = "site_name") %>%
+  ## create levels for counts of meningitis
+  mutate(meningitis_counts = fac_from_num(n)) %>%
+  ## remove the empty values
+  filter(is.na(meningitis_counts) == FALSE)
+
+
+
+## Plot map of cases by camp
+meningitis_past_4weeks_map <- ggplot() +
+  ## add in the back ground tiles
+  ggspatial::layer_spatial(tiles, interpolate = TRUE) +
+  # shapefile as polygon
+  geom_sf(data = meningitis_past_4weeks, aes(fill = meningitis_counts)) +
+  # needed to avoid gridlines being drawn
+  coord_sf(datum = NA) +
+  # add a scalebar
+  annotation_scale() +
+  # choose palette colour for fill
+  scale_fill_brewer(palette = "YlOrRd") +
+  ## Add camp number as label
+  geom_sf_text(data = meningitis_past_4weeks, aes(label = site_name), colour = "black",
+               size = 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size= 12)) +
+  labs(fill = "No. of signals",
+       captions = str_glue("Source: MSF data from {three_weeks_ago} to {reporting_week}"),
+       title = str_glue("Number of verified meningitis signals in \nCox's Bazar, {three_weeks_ago}-{reporting_week}"))
+
+```
+
+<!-- #### Combine meningitis maps -->
+```{r combine_meningitis_maps, fig.height = 16, fig.height = 5}
+
+meningitis_past_4weeks_map  + meningitis_past_week_map 
+
+```
+
+
+
+\newpage
+
+
+
+
+# Annex 1: EBS definitions and responsibilities
+
+**Signal**  A signal is reported data or information that represents a potential acute risk to human health. It is transmitted immediately and has not yet been verified as to whether or not it meets the case or event definition of the surveillance system. Signals are reported by CHVs, WHPs and TBAs.
+**Verified signal**: Reported information that meets the formal signal definition. The EAT members verify the signals the day after they are reported. The epidemiologist reviews all verified signals to decide whether a risk assessment is required.
+**Alert**: An alert will refer to a public health event that has been i) verified and ii) risk assessed and iii) requires an intervention (an investigation, a response or a communication)
+**Response** A rapid response team is deployed and could conduct activities such as active case finding, vaccination, health promotion, WASH-related activities and case management  
+
+  i)	Where teams are mobilized for the purpose of response against their routine activities  
+  
+  ii) New resources are mobilized or materials prepared
+  
+  iii) Communication done specifically for the alert
+
+Response could be through:  (1) Routine epi teams, (2) Health promotion teams with special focus on the specific alert (3) Epi, WatSan and HP teams for alerts that require a combined response
+
+HAO and Advocacy teams for alerts that need external communication
+
+
+# Annex 2: Proposed threshold definitions
+In order to make the EBS system more useful and relevant for the project, it is necessary to have a simple flagging system to be able to alert other team members of significant information. In the EBS SOP, there was a plan for risk assessments (to categorise alerts between minimal to severe risk) of verified signals by an assessment team in discussion with MTL/Medco/WASHCO- this step as well as the subsequent RRT deployment steps are currently missing. In part, this is due to the sheer volume of verified signals in this setting. In weeks 25- 34 we had 216 verified signals that EAT members reported required a response but no other actors were currently responding to. Typical EBS risk assessment steps are better suited to ad hoc early warning reports of acute public health events. With this in mind, we are proposing an intermediary step to filter ‘routine’ alerts from unusual alerts that are more likely to require a risk assessment in the camps. However, given that other examples of how to do this in an MSF setting aren’t available, any feedback is very welcome! The below thresholds are a proposal for a way to filter alerts that would be indicative of geographically clustered transmission at camp-level, increasing transmission or high numbers of people affected- beyond what is typical for the setting. 
+
+<!-- ## Table 1 -->
+<!-- Create summary table of total verified signals by camp -->
+## Threshold A: Most number of clusters per event type and camp in reporting week
+The camp with the highest number of clusters per event type in `r reporting_week` is camp `r thresholda %>% pull(chv_signals_camp)` with `r thresholda %>% pull(n)` clusters of `r thresholda %>% pull(total_event_detail)` 
+
+```{r threshold_A, fig.height = 3}
+#Select highest/most concerning given context and describe whether risk assessment is required in the recommendation section
+
+ebs_verified %>% 
+  ## only keep signals reported during the reporting week 
+  filter(epiweek_signal == reporting_week) %>% 
+  ## only keep signals that require a response
+  filter(verification_do_you_think_response_is_requi == "yes")  %>%
+  ## only keep signals where no other actor is responding
+  filter(verification_is_there_any_other_organizatio == "no")  %>%
+  ## select variables to use for table
+  select("Signal type"= total_event_detail, 
+         chv_signals_camp) %>% 
+  ## use tbl_summary from gtsummary package to make table
+  tbl_summary(by = chv_signals_camp, 
+              missing = "no")  %>% 
+  bold_labels() %>%
+  as_gt() %>%
+  gt::gtsave(filename="thresholda.png", path = here::here("2021", "4_output", "archive"))
+
+```
+
+
+## Threshold B: Largest clusters
+The largest single cluster in `r reporting_week` was for `r thresholdb %>% pull(total_event_detail)` in camp `r thresholdb %>% pull(chv_signals_camp)` that affected `r thresholdb %>% pull(verification_how_many_people)` people.
+
+```{r threshold_B}
+ebs_verified %>%
+  ## only keep signals reported during the reporting week 
+  filter(epiweek_signal == reporting_week) %>% 
+  ## only keep signals that require a response
+  filter(verification_do_you_think_response_is_requi == "yes")  %>%
+  ## only keep signals where no other actor is responding
+  filter(verification_is_there_any_other_organizatio == "no")  %>%
+  group_by(chv_signals_camp) %>%
+  filter(verification_how_many_people == max(verification_how_many_people) ) %>% 
+              select("Camp"= chv_signals_camp,"signal type"= total_event_detail,  verification_how_many_people) %>%
+  arrange(desc( verification_how_many_people)) %>%
+  rename("Largest cluster- number of people"= verification_how_many_people) %>%
+  kable()
+
+```
+
+## Threshold C: Increase in number of cases over time
+There was a consecutive increase in number of people affected by `r thresholdc_increase %>% pull(Signals)` in the catchment area in the past 3 weeks.
+
+```{r threshold_C}
+kable(thresholdc)
+```
